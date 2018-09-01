@@ -191,7 +191,6 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
         qdi = '\x00\x01'            # 查询数 默认 1查询
         cpl = ['\xC0\x04', '\xC0\x06', '\xC0\x08', '\xC0\x0a']	# 结束指针 列表
         rf = random.randint(0,4)	# rf =1|2 时 使用 1查询 并过滤伪包 可用其他国外DNS	其它值为多查询 目前已知仅8888和8844支持
-        print rf
         if rf < 2:	# rn后移 随机重组 1查询 或 n查询
             # [1d25 0100 0001 000000000001 C0C0 00010001 0000291000000000000000 06676f6f676c65 C0C2 03777777 C0C1 03636f6d C004]	1查询	起始指针，rn后移并打乱，返回1个伪包
             # [1d25 0100 0001 000000000001 C0C0 00010001 06676f6f676c65 C0C2 00010001 03777777 C0C1 00010001 03636f6d C004 00010001 0000291000000000000000]	n查询
@@ -361,7 +360,7 @@ def private_dns_response(data):
     # q_type = struct.unpack('!h', data[-4:-2])[0]   # q_type 处理有问题 未考虑查询包含Additional的附加内容，还有其它几处也是如此
     q_type = struct.unpack('!H', data[14+qln:16+qln])[0]
 
-    logging.debug('domain:%s, qtype:%x' % (q_domain, q_type))
+    logging.debug('domain:%s, qtype:%x' % (q_name, q_type))
 
     try:
         if q_type != 0x0001:
@@ -539,9 +538,8 @@ class ThreadedUDPRequestHandler(SocketServer.BaseRequestHandler):
         socket = self.request[1]
         addr = self.client_address
         transfer(data, addr, socket)    # 只允许传入的UDP查询
-
-
-from daemon import Daemon
+'''
+import daemon as Daemon
 class RunDaemon(Daemon):
 
     def run(self):
@@ -549,7 +547,7 @@ class RunDaemon(Daemon):
 
 def StopDaemon():
     RunDaemon(PIDFILE).stop()
-
+'''
 def thread_main(cfg):
     server = ThreadedUDPServer((cfg["host"], cfg["port"]), ThreadedUDPRequestHandler)
     server.serve_forever()
@@ -566,7 +564,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.stop_daemon:
-        StopDaemon()
+        # StopDaemon()
         sys.exit(0)
 
     if args.dbg_level:
@@ -610,8 +608,8 @@ if __name__ == "__main__":
         if os.name == 'nt':
             HideCMD()
             thread_main(cfg)
-        else:
-            d = RunDaemon(PIDFILE)
-            d.start()
+        # else:
+        #     d = RunDaemon(PIDFILE)
+        #     d.start()
     else:
         thread_main(cfg)
