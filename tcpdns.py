@@ -88,7 +88,7 @@ def bytetodomain(s):
         domain += s[i:i + length]
         i += length
         length = struct.unpack('!B', s[i:i + 1])[0]
-        if length != 0:
+        if length != 0: # 可取消判断，带根域“.”
             domain += '.'
 
     return (domain, qnl)
@@ -180,8 +180,8 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
     # add DNS compression pointer mutation
 
     qll = len(qnl)
-    if qll >= 2:        # 域名不少于一级 不处理根域和顶级域名(not root or gTLD)
-        AdditionalRRs = qdata[10:12]
+    AdditionalRRs = qdata[10:12]
+    if qll > 1:        # 域名不少于一级 不处理根域和顶级域名(not root or gTLD)
         if AdditionalRRs != '\x00\x00': AddRRs = qdata[18+lqn:]         # 判断是否含有附加部分，并提取
         else:
             AddRRs = '\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00'     # 否则自定义附加部分 0000291000000000000000 len=11(0x0b)
@@ -221,7 +221,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
                     idx += len(qnl[v]) + 2
                 else:
                     idc[v+1] = (i+1)*3
-                    qdn.append('\x00' + '\x01' + '\x00' + '\x01')	# 附加 QTYPE+QCLASS
+                    qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))  # '\x00' + '\x01' + '\x00' + '\x01')	# 附加 QTYPE+QCLASS
                     idx += len(qnl[v]) + 6
 
             for i,v in enumerate(idc): qdn[v] = lp[i]	# 写入指针偏移
@@ -270,7 +270,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             cpl += ['\x00', '\x00', '\x00', '\x00']
             cpe = random.choice(cpl)
             qdn.append(cpe)		# 添加 结束指针
-            qdn.append('\x00\x01\x00\x01')	# 尾部 QTYPE:A QCLASS:IN 固定值 00010001 不影响查询
+            qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))	# 尾部 QTYPE:A QCLASS:IN 固定值 00010001 不影响查询 '\x00\x01\x00\x01'
 
             if rf == 4:	# 2查询
                 qdn.append(AddRRs)	# 先添加 附加数据
@@ -280,7 +280,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             qdn.append(r2)			# 添加 r2
             qdn.append(struct.pack('!2B',0xc0,cp_r1))	# 添加 r1的偏移指针
             
-            qdn.append('\x00\x01\x00\x01')	# 多添加一个	QTYPE:A	QCLASS:IN 和 附加数据
+            qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))	# 多添加一个	QTYPE:A	QCLASS:IN 和 附加数据
             qdn.append(AddRRs)
 
             ''' # 原始逻辑 2查询后面不会多出 QTYPE:A QCLASS:IN 和 附加数据
@@ -309,6 +309,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
         qdl = [qdata[0:4], qdi, qdata[6:10], AdditionalRRs] + qdn	# 添加头部 合成数据
 
         qdata = ''.join(qdl)	# 修改数据包，生成新的 qdata
+    # else: qdn = [qdata[12:lqn+12], random.choice(cpl), qdata[lqn+13:lqn+17], AddRRs]    # 根域和顶级域名 暂不处理
     logging.debug('Send Questions: %s'%' '.join('%02X'%ord(x) for x in qdata))	# repr(qdata).replace('\\x', '')[1:-1]
 
     # length
@@ -389,9 +390,8 @@ def private_dns_response(data):
     finally:
         return (q_type, q_name, ret)
 
-
-def check_dns_packet(data, q_type): # 响应包检查
-
+'''
+def check_dns_packet(data, q_type): # 响应包检查    不使用，注释掉
     global UDPMODE
 
     test_ipv4 = False
@@ -411,7 +411,7 @@ def check_dns_packet(data, q_type): # 响应包检查
     # TODO: need more check
     if Reply_code == 3: # RCODE（Response code）是由服务端在响应中设置的 4 位响应代码
         return True
-        '''
+
         0 – 没有错误。
         1 – 格式错误。服务器无法解释请求。
         2 – 服务器失败。因为服务器的某些故障而不能完成解析请求。
@@ -419,10 +419,10 @@ def check_dns_packet(data, q_type): # 响应包检查
         4 – 未实现。当前服务器不支持这种查询。
         5 – 拒绝。服务器主动拒绝当前的查询请求。
         6 ~ 15 – 为其他失败保留的代码。
-        '''
+
     if q_type == 0x0001:    # A 记录
 
-        # ''' # 处理有问题，未考虑附加部分的记录，暂时使用移除附加部分来解决
+        # 处理有问题，未考虑附加部分的记录，暂时使用移除附加部分来解决
         ipv4_len = data[-6:-4]
         ipv4_answer_class = data[-12:-10]
         ipv4_answer_type = data[-14:-12]
@@ -443,10 +443,10 @@ def check_dns_packet(data, q_type): # 响应包检查
 
         if not (test_ipv4 or test_ipv6):
             return False
-        # '''
+        
 
     return Reply_code == 0
-
+'''
 
 def transfer(querydata, addr, server):
     """send udp dns respones back to client program
@@ -498,7 +498,7 @@ def transfer(querydata, addr, server):
 
         logging.debug("server: %s port:%s" % (ip, port))
         response = QueryDNS(ip, port, querydata)
-        if response is None or not check_dns_packet(response, q_type):
+        if response is None:    # or not check_dns_packet(response, q_type):  不检查DNS响应包
             continue
 
         if LRUCACHE is not None:
