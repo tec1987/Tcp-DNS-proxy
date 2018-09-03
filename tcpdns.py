@@ -556,7 +556,7 @@ def thread_main(cfg):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='TCP DNS Proxy')
     parser.add_argument('-f', dest='config_json', type=argparse.FileType('r'),
-            required=False, help='Json config file')
+            required=True, help='Json config file')
     parser.add_argument('-d', dest='dbg_level', action='store_true',
             required=False, default=False, help='Print debug message')
     parser.add_argument('-s', dest="stop_daemon", action='store_true',
@@ -601,15 +601,20 @@ if __name__ == "__main__":
     if cfg['speed_test']:
         TestSpeed()
 
-    logging.info(
-            'Now you can set dns server to %s:%s' % (cfg["host"], cfg["port"]))
+    logging.info('Now you can set dns server to %s:%s' % (cfg["host"], cfg["port"]))
 
     if cfg['daemon_process']:
         if os.name == 'nt':
             HideCMD()
             thread_main(cfg)
-        # else:
-        #     d = RunDaemon(PIDFILE)
-        #     d.start()
+        else:
+            # d = RunDaemon(PIDFILE)
+            # d.start()
+            try:
+                import daemon
+                logging.info('Run code in daemon process')
+                with daemon.DaemonContext(detach_process=True): thread_main(cfg)
+            except ImportError:
+                logging.error('Please install python-daemon')
     else:
         thread_main(cfg)
