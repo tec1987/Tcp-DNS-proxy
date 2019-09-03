@@ -172,7 +172,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
     lqn = len(q_name)
     q_type = struct.unpack('!H', qdata[14+lqn:16+lqn])[0]
     logging.debug('domain:%s, qtype:%x' % (q_name, q_type))
-    # logging.debug(qnl)
+    logging.debug(qnl)
 
     # question
     # queries = qdata[12:12+lqn+2+4]  # queries_len = lqn+2+4
@@ -191,7 +191,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
         qdi = '\x00\x01'            # 查询数 默认 1查询
         cpl = ['\xC0\x04', '\xC0\x06', '\xC0\x08', '\xC0\x0a']	# 结束指针 列表
         rf = random.randint(0,4)	# rf =1|2 时 使用 1查询 并过滤伪包 可用其他国外DNS	其它值为多查询 目前已知仅8888和8844支持
-        if rf < 2:	# rn后移 随机重组 1查询 或 n查询
+        if rf < 2 or qll > 4:	# rn后移 随机重组 1查询 或 n查询	域名大于4段时 n查询
             # [1d25 0100 0001 000000000001 C0C0 00010001 0000291000000000000000 06676f6f676c65 C0C2 03777777 C0C1 03636f6d C004]	1查询	起始指针，rn后移并打乱，返回1个伪包
             # [1d25 0100 0001 000000000001 C0C0 00010001 06676f6f676c65 C0C2 00010001 03777777 C0C1 00010001 03636f6d C004 00010001 0000291000000000000000]	n查询
             # 随机重组被分隔的域名
@@ -203,7 +203,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             idx = 0x12	# 当前相对偏移 12+2+4=18
             idc = [0] * (qll + 1)	# qdn列表中 '\xC0\x??'指针的索引
 
-            if rf:		# 1查询 rn后移	随机排序
+            if rf and qll < 5:		# 1查询 rn后移	随机排序	域名小于5段 否则 n查询
                 idx += len_AddRRs
                 qdn.append(AddRRs)
             else: qdi = '\x00' + struct.pack('!B', qll + 1)
@@ -216,7 +216,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
                 if v == qll - 1: lp[v+1] = random.choice(cpl)	# lp[4] = '\xC0\x04'
                 qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + v))	指针占位符 '\xC0\x3d'
 
-                if rf:
+                if rf and qll < 5:	# 域名小于5段 否则 n查询
                     idc[v+1] = (i+2)*2
                     idx += len(qnl[v]) + 2
                 else:
@@ -251,7 +251,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             for i,v in enumerate(lp): qdn[qdn.index('\xC0' + struct.pack('!B',0x30 + i))] = v
             '''
 
-            if not rf: qdn.append(AddRRs)	# 添加 附加数据 可不用判断
+            qdn.append(AddRRs)	# 添加 附加数据
             # 结果：
             # qdn = [C029, 00010001, 03636f6d, C004, 00010001, 06676f6f676c65, C012, 00010001, 03777777, C01c, 00010001, 0000291000000000000000]
             # qdn = [C02c, 00010001, 0000291000000000000000, 03636f6d, C004, 06676f6f676c65, C01d, 03777777, C023]
@@ -305,6 +305,8 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
 
         else:	# [0c93 0120 0001 000000000001 03777777 06676f6f676c65 03636f6d c004 00010001 0000291000000000000000]	仅修改结束指针，返回2个伪包
             qdn = [qdata[12:lqn+13], random.choice(cpl), qdata[lqn+14:lqn+18], AddRRs]
+
+        logging.debug('qdn= %s' % qdn)
 
         qdl = [qdata[0:4], qdi, qdata[6:10], AdditionalRRs] + qdn	# 添加头部 合成数据
 
