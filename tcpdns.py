@@ -16,6 +16,7 @@
 # 2014-07-08  use json config file
 # 2014-07-09  support private host
 # 2015-01-14  support dns server auto switch
+# 2019-09-05  add DNS compression pointer mutation to Anti DNS Poisoning & hijack(ISP Level)
 
 #  8.8.8.8        google
 #  8.8.4.4        google
@@ -188,51 +189,33 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             AdditionalRRs = '\x00\x01'
         len_AddRRs = len(AddRRs)    # 计算附加部分的长度    # len(qdata) - lqn - 18
 
-        qdi = '\x00\x01'            # 查询数 默认 1查询
-        cpl = ['\xC0\x04', '\xC0\x06', '\xC0\x08', '\xC0\x0a']	# 结束指针 列表
-        rf = random.randint(0,4)	# rf =1|2 时 使用 1查询 并过滤伪包 可用其他国外DNS	其它值为多查询 目前已知仅8888和8844支持
-        if rf < 2 or qll > 4:	# rn后移 随机重组 1查询 或 n查询	域名大于4段时 n查询
-            # [1d25 0100 0001 000000000001 C0C0 00010001 0000291000000000000000 06676f6f676c65 C0C2 03777777 C0C1 03636f6d C004]	1查询	起始指针，rn后移并打乱，返回1个伪包
-            # [1d25 0100 0001 000000000001 C0C0 00010001 06676f6f676c65 C0C2 00010001 03777777 C0C1 00010001 03636f6d C004 00010001 0000291000000000000000]	n查询
-            # 随机重组被分隔的域名
-            lp = [''] * (qll + 1)		# rn的指针数据
-            li = range(qll)
-            random.shuffle(li)	# li=[3, 0, 2, 1]
-            cpl += ['\xC0\x0e', '\xC0\x10']
-            qdn = ['\xC0\x30', qdata[lqn + 14: lqn + 18]]	# 查询数据部分
-            idx = 0x12	# 当前相对偏移 12+2+4=18
-            idc = [0] * (qll + 1)	# qdn列表中 '\xC0\x??'指针的索引
+        cpl = ['\xC0\x04', '\xC0\x06', '\xC0\x07', '\xC0\x08', '\xC0\x09', '\xC0\x0a']	# 结束指针 列表
+        rf = random.randint(0,5)	# rf=0|1时 排序重组 随机2-n查询 2|3时 分别使用2|3查询 4|5 1查询 并过滤伪包 可用其他国外DNS	目前已知仅8888和8844支持多查询
 
-            if rf and qll < 5:		# 1查询 rn后移	随机排序	域名小于5段 否则 n查询
-                idx += len_AddRRs
-                qdn.append(AddRRs)
-            else: qdi = '\x00' + struct.pack('!B', qll + 1)
-                
+        if rf < 2 or qll > 4:	# qnl 重组 2-n查询
+            qi = random.randint(2,qll)
+            qdi = '\x00' + struct.pack('!B', qi) # 查询数 随机2-n查询
+            lp = [''] * (qll)		# qnl[i+1] 的 偏移指针   lp[i] 即指向 qnl[i+1] 的偏移量
+            lp[qll-1] = random.choice(cpl)	# qnl[qll-1] 后的 结束指针
+            li = range(1, qll)	# range(qll)[1:]    [1, 2, 3, ..., qll-1]
+
+            if rf: random.shuffle(li)	# 随机排序 否则 逆序
+            else: li.reverse()	# li = [qll-1, ..., 3, 2, 1]
+
+            qdn = [qnl[0], '\xC0\x30', qdata[lqn + 14: lqn + 18]]	# 查询数据部分 第一个查询 qnl[1]的指针(占位) 查询类型
+            idx = 0x12+len(qnl[0])	# 当前相对偏移 12+2+4=18(0x12)
+
             # 方法1，使用列表索引
-            for i,v in enumerate(li):	# li=[3, 0, 2, 1]	i=0,1,2,3	v=3,0,2,1
-                qdn.append(qnl[v])
-                lp[v] = '\xC0' + struct.pack('!B', idx)
+            for n,i in enumerate(li):	# li=[3, 2, 1]
+                qdn.append(qnl[i])
+                lp[i-1] = '\xC0' + struct.pack('!B', idx)	# 偏移量
+                qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + i))	指针占位符 '\xC0\x3d'
+                qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))  # '\x00' + '\x01' + '\x00' + '\x01')	# 附加随机 QTYPE+QCLASS
+                idx += len(qnl[i]) + 6
+                if n+2 == qi: idx += len_AddRRs
 
-                if v == qll - 1: lp[v+1] = random.choice(cpl)	# lp[4] = '\xC0\x04'
-                qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + v))	指针占位符 '\xC0\x3d'
-
-                if rf and qll < 5:	# 域名小于5段 否则 n查询
-                    idc[v+1] = (i+2)*2
-                    idx += len(qnl[v]) + 2
-                else:
-                    idc[v+1] = (i+1)*3
-                    qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))  # '\x00' + '\x01' + '\x00' + '\x01')	# 附加 QTYPE+QCLASS
-                    idx += len(qnl[v]) + 6
-
-            for i,v in enumerate(idc): qdn[v] = lp[i]	# 写入指针偏移
-            # 结果：
-            # qdn = [C030, 00010001, 03636f6d, C004, 00010001, 06676f6f676c65, C032, 00010001, 03777777, C031, 00010001]
-            # lp = [0x29, 0x1c, 0x12]
-            # qdn = [C029, 00010001, 03636f6d, C004, 00010001, 06676f6f676c65, C012, 00010001, 03777777, C01c, 00010001]
-
-            # qdn = [C030, 00010001, 0000291000000000000000, 03636f6d, C004, 06676f6f676c65, C032, 03777777, C031]
-            # lp = [0x2c, 0x23, 0x1d]
-            # qdn = [C02c, 00010001, 0000291000000000000000, 03636f6d, C004, 06676f6f676c65, C01d, 03777777, C023]
+            for n,i in enumerate([0]+li): qdn[n*3+1] = lp[i]	# 写入指针偏移
+            qdn.insert(qi*3, AddRRs)	# 插入 附加数据
 
             ''' 方法2，无列表索引，后面使用 qdn.index 查找索引，逻辑较简单
             for v in li:	# li = [2, 1, 0]
@@ -249,22 +232,39 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
                     idx += len(qnl[v]) + 6
 
             for i,v in enumerate(lp): qdn[qdn.index('\xC0' + struct.pack('!B',0x30 + i))] = v
+            qdn.append(AddRRs)	# 添加 附加数据
             '''
 
-            qdn.append(AddRRs)	# 添加 附加数据
-            # 结果：
-            # qdn = [C029, 00010001, 03636f6d, C004, 00010001, 06676f6f676c65, C012, 00010001, 03777777, C01c, 00010001, 0000291000000000000000]
-            # qdn = [C02c, 00010001, 0000291000000000000000, 03636f6d, C004, 06676f6f676c65, C01d, 03777777, C023]
+        elif rf > 3:	# rf=4|5 1查询
+            qdi = '\x00\x01'
+            if rf > 4: qdn = [qdata[12:lqn+13], random.choice(cpl), qdata[lqn+14:lqn+18], AddRRs]	# 仅修改结束指针，返回2个伪包
+            else:	# rn后移 随机排序
+                cpl += ['\xC0\x0e', '\xC0\x10']
+                lp = [''] * (qll + 1)	# rn的指针数据
+                lp[qll] = random.choice(cpl)
+                li = range(qll)
+                random.shuffle(li)	# li=[0, 3, 2, 1]
+                qdn = ['\xC0\x30', qdata[lqn + 14: lqn + 18], AddRRs]	# 查询数据部分 第一个查询的指针和查询类型+附加数据
+                idx = 0x12 + len_AddRRs
 
-        elif rf > 2:	# r2后移 随机使用2|3个查询
-            qdi = '\x00\x03'	# 3查询
+                for i in li:	# i=0,3,2,1
+                    qdn.append(qnl[i])
+                    lp[i] = '\xC0' + struct.pack('!B', idx)
+                    qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + v))	指针占位符 '\xC0\x3d'
+                    idx += len(qnl[i]) + 2
+
+                for n,i in enumerate(li): qdn[n*2+4] = lp[i+1]	# 写入指针偏移
+                qdn[0] = lp[0]
+
+        else:	# rf=2|3 r2后移 随机使用2|3个查询
+            qdi = '\x00' + struct.pack('!B', rf)	# 2|3查询
             r1 = qnl[-1]	# 顶级域名gTLD
             r2 = qnl[-2]	# 一级域名
             cp_r2 = 0	# r2的偏移指针
             cp_r1 = lqn-len(r2)-len(r1)+19	# 计算 r1的偏移指针 len(rn)-len(r2)-len(r1)+6+12
 
             qdn = qnl[:-2]	# 提取 r2	前的子域名数据
-            qdn.append('\xC0\x00')	# 添加占位字符串 r2的偏移指针 后面还要修改
+            qdn.append('\xC0\x00')	# 添加占位字符串 r2的偏移指针
             qdn.append(qdata[14+lqn:18+lqn])	# 添加QTYPE和QCLASS
             qdn.append(r1)
             cpl += ['\x00', '\x00', '\x00', '\x00']
@@ -272,10 +272,9 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             qdn.append(cpe)		# 添加 结束指针
             qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))	# 尾部 QTYPE:A QCLASS:IN 固定值 00010001 不影响查询 '\x00\x01\x00\x01'
 
-            if rf == 4:	# 2查询
+            if rf == 2:	# 2查询
                 qdn.append(AddRRs)	# 先添加 附加数据
                 cp_r2 += len(AddRRs)
-                qdi	= '\x00\x02'	# 查询数写为2
 
             qdn.append(r2)			# 添加 r2
             qdn.append(struct.pack('!2B',0xc0,cp_r1))	# 添加 r1的偏移指针
@@ -284,7 +283,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             qdn.append(AddRRs)
 
             ''' # 原始逻辑 2查询后面不会多出 QTYPE:A QCLASS:IN 和 附加数据
-            if rf == 4:	# 2查询
+            if rf == 2:	# 2查询
                 qdn.append(AddRRs)	# 添加 附加数据
                 cp_r2 += len(AddRRs)
                 qdi	= '\x00\x02'	# 查询数写为2
@@ -303,13 +302,9 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             # qdn = [03777777, C02a, 00010001, 03636f6d, 00 00010001, 0000291000000000000000, 06676f6f676c65, C016, 00010001, 0000291000000000000000]
             # qdn = [03777777, C01f, 00010001, 03636f6d, 00 00010001, 06676f6f676c65, C016, 00010001, 0000291000000000000000]
 
-        else:	# [0c93 0120 0001 000000000001 03777777 06676f6f676c65 03636f6d c004 00010001 0000291000000000000000]	仅修改结束指针，返回2个伪包
-            qdn = [qdata[12:lqn+13], random.choice(cpl), qdata[lqn+14:lqn+18], AddRRs]
-
         logging.debug('qdn= %s' % qdn)
 
         qdl = [qdata[0:4], qdi, qdata[6:10], AdditionalRRs] + qdn	# 添加头部 合成数据
-
         qdata = ''.join(qdl)	# 修改数据包，生成新的 qdata
     # else: qdn = [qdata[12:lqn+12], random.choice(cpl), qdata[lqn+13:lqn+17], AddRRs]    # 根域和顶级域名 暂不处理
     logging.debug('Send Questions: %s'%' '.join('%02X'%ord(x) for x in qdata))	# repr(qdata).replace('\\x', '')[1:-1]
