@@ -16,7 +16,7 @@
 # 2014-07-08  use json config file
 # 2014-07-09  support private host
 # 2015-01-14  support dns server auto switch
-# 2019-09-05  add DNS compression pointer mutation to Anti DNS Poisoning & hijack(ISP Level)
+# 2018-09-01  add DNS compression pointer mutation and pseudo-package filter to Anti DNS Poisoning & hijack(ISP Level) by tec1987
 
 #  8.8.8.8        google
 #  8.8.4.4        google
@@ -56,8 +56,7 @@ len_AddRRs = 0
 def cfg_logging(dbg_level):
     """ logging format
     """
-    logging.basicConfig(format='[%(asctime)s][%(levelname)s] %(message)s',
-                        level=dbg_level)
+    logging.basicConfig(format='[%(asctime)s][%(levelname)s] %(message)s', level=dbg_level)
 
 def hexdump(src, width=16):
     """ hexdump, default width 16
@@ -89,15 +88,15 @@ def bytetodomain(s):
         domain += s[i:i + length]
         i += length
         length = struct.unpack('!B', s[i:i + 1])[0]
-        if length != 0: # 可取消判断，带根域“.”
+        if length != 0:	# 可取消判断，带根域“.”
             domain += '.'
 
     return (domain, qnl)
 
 def dnsping(ip, port):
     buff =  "\x00\x16\xb2\xc3\x01\x00\x00\x01"
-    buff += "\x00\x00\x00\x00\x00\x00\x01\x67"  # '\x67' == 'g'
-    buff += "\x02\x63\x6e\x00\x00\x01\x00\x01"  # '\x63\x6e' == 'cn'
+    buff += "\x00\x00\x00\x00\x00\x00\x01\x67"	# '\x67' == 'g'
+    buff += "\x02\x63\x6e\x00\x00\x01\x00\x01"	# '\x63\x6e' == 'cn'
 
     cost = 100
     begin = time.time()
@@ -151,7 +150,7 @@ def TestSpeed():
     DATA['speed_test'] = False
 
 
-def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
+def QueryDNS(server, port, qdata):	# 处理传入的UDP包，转发给上游DNS
     """tcp dns request
 
     Args:
@@ -168,7 +167,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
     if DATA['err_counter'] >= 10 and not DATA['speed_test']:
         TestSpeed()
 
-    # logging.debug(qdata)
+    logging.debug(qdata)
     q_name, qnl = bytetodomain(qdata[12:])
     lqn = len(q_name)
     q_type = struct.unpack('!H', qdata[14+lqn:16+lqn])[0]
@@ -176,26 +175,26 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
     logging.debug(qnl)
 
     # question
-    # queries = qdata[12:12+lqn+2+4]  # queries_len = lqn+2+4
+    # queries = qdata[12:12+lqn+2+4]	# queries_len = lqn+2+4
 
     # add DNS compression pointer mutation
 
     qll = len(qnl)
     AdditionalRRs = qdata[10:12]
-    if qll > 1:        # 域名不少于一级 不处理根域和顶级域名(not root or gTLD)
-        if AdditionalRRs != '\x00\x00': AddRRs = qdata[18+lqn:]         # 判断是否含有附加部分，并提取
+    if qll > 1: 	# 域名不少于一级 不处理根域和顶级域名(not root or gTLD)
+        if AdditionalRRs != '\x00\x00': AddRRs = qdata[18+lqn:] 	# 判断是否含有附加部分，并提取
         else:
-            AddRRs = '\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00'     # 否则自定义附加部分 0000291000000000000000 len=11(0x0b)
+            AddRRs = '\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00' 	# 否则自定义附加部分 0000291000000000000000 len=11(0x0b)
             AdditionalRRs = '\x00\x01'
-        len_AddRRs = len(AddRRs)    # 计算附加部分的长度    # len(qdata) - lqn - 18
+        len_AddRRs = len(AddRRs)	# 计算附加部分的长度	# len(qdata) - lqn - 18
 
         cpl = ['\xC0\x04', '\xC0\x06', '\xC0\x07', '\xC0\x08', '\xC0\x09', '\xC0\x0a']	# 结束指针 列表
-        rf = random.randint(0,5)	# rf=0|1时 排序重组 随机2-n查询 2|3时 分别使用2|3查询 4|5 1查询 并过滤伪包 可用其他国外DNS	目前已知仅8888和8844支持多查询
+        rf = random.randint(0,5)	# rf=0|1时 排序重组 随机2-n查询 2|3时 分别使用2|3查询 4|5 1查询 并过滤伪包 可用其他国外DNS  目前已知仅8888和8844支持多查询
 
         if rf < 2 or qll > 4:	# qnl 重组 2-n查询
             qi = random.randint(2,qll)
-            qdi = '\x00' + struct.pack('!B', qi) # 查询数 随机2-n查询
-            lp = [''] * (qll)		# qnl[i+1] 的 偏移指针   lp[i] 即指向 qnl[i+1] 的偏移量
+            qdi = '\x00' + struct.pack('!B', qi)	# 查询数 随机2-n查询
+            lp = [''] * (qll)	# qnl[i+1] 的 偏移指针   lp[i] 即指向 qnl[i+1] 的偏移量
             lp[qll-1] = random.choice(cpl)	# qnl[qll-1] 后的 结束指针
             li = range(1, qll)	# range(qll)[1:]    [1, 2, 3, ..., qll-1]
 
@@ -209,8 +208,8 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             for n,i in enumerate(li):	# li=[3, 2, 1]
                 qdn.append(qnl[i])
                 lp[i-1] = '\xC0' + struct.pack('!B', idx)	# 偏移量
-                qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + i))	指针占位符 '\xC0\x3d'
-                qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))  # '\x00' + '\x01' + '\x00' + '\x01')	# 附加随机 QTYPE+QCLASS
+                qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + i))   指针占位符 '\xC0\x3d'
+                qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))	# '\x00' + '\x01' + '\x00' + '\x01')	# 附加随机 QTYPE+QCLASS
                 idx += len(qnl[i]) + 6
                 if n+2 == qi: idx += len_AddRRs
 
@@ -244,13 +243,13 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
                 lp[qll] = random.choice(cpl)
                 li = range(qll)
                 random.shuffle(li)	# li=[0, 3, 2, 1]
-                qdn = ['\xC0\x30', qdata[lqn + 14: lqn + 18], AddRRs]	# 查询数据部分 第一个查询的指针和查询类型+附加数据
+                qdn = ['\xC0\x30', qdata[lqn + 14: lqn + 18], AddRRs]	# 第一个查询的指针 查询类型 附加数据
                 idx = 0x12 + len_AddRRs
 
                 for i in li:	# i=0,3,2,1
                     qdn.append(qnl[i])
                     lp[i] = '\xC0' + struct.pack('!B', idx)
-                    qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + v))	指针占位符 '\xC0\x3d'
+                    qdn.append('\xC0\x3d')	# qdn.append('\xC0' + struct.pack('!B',0x31 + v))   指针占位符 '\xC0\x3d'
                     idx += len(qnl[i]) + 2
 
                 for n,i in enumerate(li): qdn[n*2+4] = lp[i+1]	# 写入指针偏移
@@ -263,37 +262,37 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
             cp_r2 = 0	# r2的偏移指针
             cp_r1 = lqn-len(r2)-len(r1)+19	# 计算 r1的偏移指针 len(rn)-len(r2)-len(r1)+6+12
 
-            qdn = qnl[:-2]	# 提取 r2	前的子域名数据
+            qdn = qnl[:-2]	# 提取 r2   前的子域名数据
             qdn.append('\xC0\x00')	# 添加占位字符串 r2的偏移指针
             qdn.append(qdata[14+lqn:18+lqn])	# 添加QTYPE和QCLASS
             qdn.append(r1)
             cpl += ['\x00', '\x00', '\x00', '\x00']
             cpe = random.choice(cpl)
-            qdn.append(cpe)		# 添加 结束指针
+            qdn.append(cpe)	# 添加 结束指针
             qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))	# 尾部 QTYPE:A QCLASS:IN 固定值 00010001 不影响查询 '\x00\x01\x00\x01'
 
             if rf == 2:	# 2查询
                 qdn.append(AddRRs)	# 先添加 附加数据
                 cp_r2 += len(AddRRs)
 
-            qdn.append(r2)			# 添加 r2
+            qdn.append(r2)	# 添加 r2
             qdn.append(struct.pack('!2B',0xc0,cp_r1))	# 添加 r1的偏移指针
-            
-            qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))	# 多添加一个	QTYPE:A	QCLASS:IN 和 附加数据
+
+            qdn.append(struct.pack('!I',random.randint(0,0xFFFFFFFF)))	# 多添加一个    QTYPE:A QCLASS:IN 和 附加数据
             qdn.append(AddRRs)
 
             ''' # 原始逻辑 2查询后面不会多出 QTYPE:A QCLASS:IN 和 附加数据
             if rf == 2:	# 2查询
                 qdn.append(AddRRs)	# 添加 附加数据
                 cp_r2 += len(AddRRs)
-                qdi	= '\x00\x02'	# 查询数写为2
-                qdn.append(r2)		# 添加 r2
+                qdi = '\x00\x02'	# 查询数写为2
+                qdn.append(r2)	# 添加 r2
                 qdn.append(struct.pack('!2B',0xc0,cp_r1))	# 添加 r1的偏移指针
-            else:				# 3查询
-                qdn.append(r2)		# 添加 r2 (后移为第3个查询)
+            else:	# 3查询
+                qdn.append(r2)	# 添加 r2 (后移为第3个查询)
                 qdn.append(struct.pack('!2B',0xc0,cp_r1))	# 添加 r1的偏移指针
-                qdn.append('\x00\x01\x00\x01')	# 多添加一个	QTYPE:A	QCLASS:IN
-                qdn.append(AddRRs)		# 附加数据
+                qdn.append('\x00\x01\x00\x01')	# 多添加一个    QTYPE:A QCLASS:IN
+                qdn.append(AddRRs)	# 附加数据
             '''
 
             cp_r2 += lqn-len(r2)+len(cpe)+23	# 计算 r2的偏移指针 len(rn)-len(r2)+5|6+6+12; 其中 len(rn)=lqn+1 (尾部 结束指针|00 00010001 共5|6字节；指针偏移+QTYPE+QCLASS共6字节；头部12字节)
@@ -306,7 +305,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
 
         qdl = [qdata[0:4], qdi, qdata[6:10], AdditionalRRs] + qdn	# 添加头部 合成数据
         qdata = ''.join(qdl)	# 修改数据包，生成新的 qdata
-    # else: qdn = [qdata[12:lqn+12], random.choice(cpl), qdata[lqn+13:lqn+17], AddRRs]    # 根域和顶级域名 暂不处理
+
     logging.debug('Send Questions: %s'%' '.join('%02X'%ord(x) for x in qdata))	# repr(qdata).replace('\\x', '')[1:-1]
 
     # length
@@ -327,8 +326,8 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
         i = 0
         while i < 3:
             data = s.recv(4096)
-            if AdditionalRRs == '\x00\x00': break   # 请求包中没有 附加数据
-            recv_AddRRs = data[10:12]       # 响应包中附加RR的数量
+            if AdditionalRRs == '\x00\x00': break	# 请求包中没有 附加数据
+            recv_AddRRs = data[10:12]	# 响应包中附加RR的数量
             if recv_AddRRs == AdditionalRRs: break
             else:
                 i += 1
@@ -341,7 +340,7 @@ def QueryDNS(server, port, qdata):  # 处理传入的UDP包，转发给上游DNS
     finally:
         if s:
             s.close()
-        return data     # 返回包有可能是TCP，见配置文件
+        return data	# 返回包有可能是TCP，见配置文件
 
 
 def private_dns_response(data):
@@ -355,7 +354,7 @@ def private_dns_response(data):
 
     q_name, qnl = bytetodomain(data[12:])
     qln = len(q_name)
-    # q_type = struct.unpack('!h', data[-4:-2])[0]   # q_type 处理有问题 未考虑查询包含Additional的附加内容，还有其它几处也是如此
+    # q_type = struct.unpack('!h', data[-4:-2])[0]	# q_type 处理有问题 未考虑查询包含Additional的附加内容，还有其它几处也是如此
     q_type = struct.unpack('!H', data[14+qln:16+qln])[0]
 
     logging.debug('domain:%s, qtype:%x' % (q_name, q_type))
@@ -364,7 +363,7 @@ def private_dns_response(data):
         if q_type != 0x0001:
             return
 
-        if Questions != '\x00\x01' or AnswerRRs != '\x00\x00' or AuthorityRRs != '\x00\x00':    #  or AdditionalRRs != '\x00\x00'
+        if Questions != '\x00\x01' or AnswerRRs != '\x00\x00' or AuthorityRRs != '\x00\x00':	#  or AdditionalRRs != '\x00\x00'
             return
 
         items = cfg['private_host'].items()
@@ -388,7 +387,7 @@ def private_dns_response(data):
         return (q_type, q_name, ret)
 
 '''
-def check_dns_packet(data, q_type): # 响应包检查    不使用，注释掉
+def check_dns_packet(data, q_type):	# 响应包检查    不使用，注释掉
     global UDPMODE
 
     test_ipv4 = False
@@ -399,14 +398,14 @@ def check_dns_packet(data, q_type): # 响应包检查    不使用，注释掉
 
     Flags = UDPMODE and data[2:4] or data[4:6]
 
-    AddRRs = UDPMODE and data[10:12] or data[12:14]     # 检查并移除附加部分，使用请求包中附加部分的长度，可能会有问题？
+    AddRRs = UDPMODE and data[10:12] or data[12:14]	# 检查并移除附加部分，使用请求包中附加部分的长度，可能会有问题？
     if AddRRs != '\x00\x00':
         if len_AddRRs != 0: data = data[:-len_AddRRs]
 
     Reply_code = struct.unpack('!H', Flags)[0] & 0x000F
 
     # TODO: need more check
-    if Reply_code == 3: # RCODE（Response code）是由服务端在响应中设置的 4 位响应代码
+    if Reply_code == 3:	# RCODE（Response code）由服务端在响应中设置的 4 位响应代码
         return True
 
         0 – 没有错误。
@@ -417,7 +416,7 @@ def check_dns_packet(data, q_type): # 响应包检查    不使用，注释掉
         5 – 拒绝。服务器主动拒绝当前的查询请求。
         6 ~ 15 – 为其他失败保留的代码。
 
-    if q_type == 0x0001:    # A 记录
+    if q_type == 0x0001:	# A 记录
 
         # 处理有问题，未考虑附加部分的记录，暂时使用移除附加部分来解决
         ipv4_len = data[-6:-4]
@@ -440,7 +439,7 @@ def check_dns_packet(data, q_type): # 响应包检查    不使用，注释掉
 
         if not (test_ipv4 or test_ipv6):
             return False
-        
+
 
     return Reply_code == 0
 '''
@@ -495,7 +494,7 @@ def transfer(querydata, addr, server):
 
         logging.debug("server: %s port:%s" % (ip, port))
         response = QueryDNS(ip, port, querydata)
-        if response is None:    # or not check_dns_packet(response, q_type):  不检查DNS响应包
+        if response is None:	# or not check_dns_packet(response, q_type):  不检查DNS响应包
             continue
 
         if LRUCACHE is not None:
@@ -517,7 +516,6 @@ def HideCMD():
         ctypes.windll.kernel32.CloseHandle(whnd)
 
 
-
 class ThreadedUDPServer(SocketServer.ThreadingMixIn, SocketServer.UDPServer):
 
     def __init__(self, s, t):
@@ -534,7 +532,7 @@ class ThreadedUDPRequestHandler(SocketServer.BaseRequestHandler):
         data = self.request[0]
         socket = self.request[1]
         addr = self.client_address
-        transfer(data, addr, socket)    # 只允许传入的UDP查询
+        transfer(data, addr, socket)	# 只允许传入的UDP查询
 '''
 import daemon as Daemon
 class RunDaemon(Daemon):
@@ -551,13 +549,13 @@ def thread_main(cfg):
     server.shutdown()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='TCP DNS Proxy')
+    parser = argparse.ArgumentParser(description='A DNS Proxy')
     parser.add_argument('-f', dest='config_json', type=argparse.FileType('r'),
-            required=True, help='Json config file')
+            required=False, default='tcpdns.json', help='Json config file')
     parser.add_argument('-d', dest='dbg_level', action='store_true',
             required=False, default=False, help='Print debug message')
     parser.add_argument('-s', dest="stop_daemon", action='store_true',
-            required=False, default=False, help='Stop tcp dns proxy daemon')
+            required=False, default=False, help='Stop dns proxy daemon')
     args = parser.parse_args()
 
     if args.stop_daemon:
@@ -589,8 +587,8 @@ if __name__ == "__main__":
     if cfg['enable_lru_cache']:
         LRUCACHE = lrucache(cfg['lru_cache_size'])
 
-    logging.info('TCP DNS Proxy, https://github.com/henices/Tcp-DNS-proxy')
-    logging.info('DNS Servers:\n%s' % DNS_SERVERS)
+    logging.info('A DNS Proxy, Thanks https://github.com/henices/Tcp-DNS-proxy' )
+    logging.info('DNS Servers: %s' % DNS_SERVERS)
     logging.info('Query Timeout: %f' % (cfg['socket_timeout']))
     logging.info('Enable Cache: %r' % (cfg['enable_lru_cache']))
     logging.info('Enable Switch: %r' % (cfg['enable_server_switch']))
